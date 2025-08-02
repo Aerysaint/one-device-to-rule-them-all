@@ -53,6 +53,71 @@ class SignalingServer:
         # Notify about available peers
         await self.notify_peers(room_id)
     
+    async def cleanup_peer(self, peer_id):
+        """Clean up a disconnected peer and notify others"""
+        logger.info(f"Cleaning up peer {peer_id}")
+        
+        # Find which room the peer was in
+        peer_room = None
+        peer_type = None
+        
+        for room_id, room in self.rooms.items():
+            if room['host'] == peer_id:
+                peer_room = room_id
+                peer_type = 'host'
+                room['host'] = None
+                break
+            elif peer_id in room['clients']:
+                peer_room = room_id
+                peer_type = 'client'
+                room['clients'].discard(peer_id)
+                break
+        
+        # Remove from peer lists
+        if peer_id in self.hosts:
+            del self.hosts[peer_id]
+        if peer_id in self.clients:
+            del self.clients[peer_id]
+        
+        # Notify remaining peers about the disconnection
+        if peer_room:
+            await self.notify_peer_disconnection(peer_room, peer_id, peer_type)
+            # Also notify about remaining available peers
+            await self.notify_peers(peer_room)
+    
+    async def notify_peer_disconnection(self, room_id, disconnected_peer_id, peer_type):
+        """Notify peers about a disconnection"""
+        if room_id not in self.rooms:
+            return
+        
+        room = self.rooms[room_id]
+        
+        # Notify host if a client disconnected
+        if peer_type == 'client' and room['host'] and room['host'] in self.hosts:
+            try:
+                await self.hosts[room['host']].send(json.dumps({
+                    'type': 'client_disconnected',
+                    'client_id': disconnected_peer_id,
+                    'room_id': room_id
+                }))
+                logger.info(f"Notified host {room['host']} about client {disconnected_peer_id} disconnection")
+            except Exception as e:
+                logger.error(f"Error notifying host about disconnection: {e}")
+        
+        # Notify clients if host disconnected
+        elif peer_type == 'host':
+            for client_id in room['clients']:
+                if client_id in self.clients:
+                    try:
+                        await self.clients[client_id].send(json.dumps({
+                            'type': 'host_disconnected',
+                            'host_id': disconnected_peer_id,
+                            'room_id': room_id
+                        }))
+                        logger.info(f"Notified client {client_id} about host {disconnected_peer_id} disconnection")
+                    except Exception as e:
+                        logger.error(f"Error notifying client about disconnection: {e}")
+
     async def notify_peers(self, room_id):
         """Notify peers in a room about available connections"""
         if room_id not in self.rooms:
@@ -69,20 +134,26 @@ class SignalingServer:
             for client_id in client_ids:
                 if client_id in self.clients:
                     logger.info(f"Notifying client {client_id} about host {host_id}")
-                    await self.clients[client_id].send(json.dumps({
-                        'type': 'host_available',
-                        'host_id': host_id,
-                        'room_id': room_id
-                    }))
+                    try:
+                        await self.clients[client_id].send(json.dumps({
+                            'type': 'host_available',
+                            'host_id': host_id,
+                            'room_id': room_id
+                        }))
+                    except Exception as e:
+                        logger.error(f"Error notifying client {client_id}: {e}")
         
         # Notify host about available clients
         if host_id and host_id in self.hosts and client_ids:
             logger.info(f"Notifying host {host_id} about clients {client_ids}")
-            await self.hosts[host_id].send(json.dumps({
-                'type': 'clients_available',
-                'client_ids': client_ids,
-                'room_id': room_id
-            }))
+            try:
+                await self.hosts[host_id].send(json.dumps({
+                    'type': 'clients_available',
+                    'client_ids': client_ids,
+                    'room_id': room_id
+                }))
+            except Exception as e:
+                logger.error(f"Error notifying host {host_id}: {e}")
     
     async def relay_message(self, websocket, message):
         """Relay WebRTC signaling messages between peers"""
@@ -134,16 +205,7 @@ class SignalingServer:
         finally:
             # Clean up on disconnect
             if peer_id:
-                if peer_id in self.hosts:
-                    del self.hosts[peer_id]
-                if peer_id in self.clients:
-                    del self.clients[peer_id]
-                
-                # Remove from rooms
-                for room_id, room in self.rooms.items():
-                    if room['host'] == peer_id:
-                        room['host'] = None
-                    room['clients'].discard(peer_id)
+                await self.cleanup_peer(peer_id)
     
     async def start_server(self, host='localhost', port=8765):
         """Start the signaling server"""

@@ -109,23 +109,38 @@ class WebRTCHost:
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
             logger.info(f"Connection state for {client_id}: {pc.connectionState}")
-            if pc.connectionState == "closed":
+            if pc.connectionState in ["closed", "failed", "disconnected"]:
+                logger.info(f"Cleaning up connection for {client_id}")
                 if client_id in self.peer_connections:
+                    try:
+                        await self.peer_connections[client_id].close()
+                    except:
+                        pass
                     del self.peer_connections[client_id]
         
         @pc.on("icecandidate")
         async def on_icecandidate(candidate):
             if candidate:
-                await self.websocket.send(json.dumps({
-                    'type': 'ice_candidate',
-                    'sender': self.peer_id,
-                    'target': client_id,
-                    'candidate': {
-                        'candidate': candidate.candidate,
-                        'sdpMid': candidate.sdpMid,
-                        'sdpMLineIndex': candidate.sdpMLineIndex
-                    }
-                }))
+                try:
+                    await self.websocket.send(json.dumps({
+                        'type': 'ice_candidate',
+                        'sender': self.peer_id,
+                        'target': client_id,
+                        'candidate': {
+                            'candidate': candidate.candidate,
+                            'sdpMid': candidate.sdpMid,
+                            'sdpMLineIndex': candidate.sdpMLineIndex
+                        }
+                    }))
+                except Exception as e:
+                    logger.error(f"Error sending ICE candidate to {client_id}: {e}")
+        
+        @pc.on("iceconnectionstatechange")
+        async def on_iceconnectionstatechange():
+            logger.info(f"ICE connection state for {client_id}: {pc.iceConnectionState}")
+            if pc.iceConnectionState in ["failed", "disconnected"]:
+                logger.warning(f"ICE connection failed/disconnected for {client_id}")
+                # The connection state handler will clean up
         
         return pc
     
@@ -184,6 +199,19 @@ class WebRTCHost:
             await pc.addIceCandidate(candidate)
             logger.info(f"Added ICE candidate from {client_id}")
     
+    async def handle_client_disconnected(self, message):
+        """Handle client disconnection notification"""
+        client_id = message['client_id']
+        logger.info(f"Client {client_id} disconnected, cleaning up connection")
+        
+        if client_id in self.peer_connections:
+            try:
+                await self.peer_connections[client_id].close()
+            except Exception as e:
+                logger.error(f"Error closing connection for {client_id}: {e}")
+            del self.peer_connections[client_id]
+            logger.info(f"Cleaned up connection for {client_id}")
+    
     async def handle_signaling_messages(self):
         """Handle incoming signaling messages"""
         try:
@@ -207,6 +235,9 @@ class WebRTCHost:
                     
                     elif msg_type == 'ice_candidate':
                         await self.handle_ice_candidate(data)
+                    
+                    elif msg_type == 'client_disconnected':
+                        await self.handle_client_disconnected(data)
                     
                     else:
                         logger.info(f"Received: {msg_type}")

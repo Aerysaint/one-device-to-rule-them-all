@@ -67,11 +67,21 @@ class WebRTCClient:
     
     async def create_peer_connection(self):
         """Create WebRTC peer connection"""
+        # Close existing connection if any
+        if self.peer_connection:
+            try:
+                await self.peer_connection.close()
+            except:
+                pass
+        
         self.peer_connection = RTCPeerConnection(configuration=RTCConfiguration(iceServers=self.ice_servers))
         
         @self.peer_connection.on("connectionstatechange")
         async def on_connectionstatechange():
             logger.info(f"Connection state: {self.peer_connection.connectionState}")
+            if self.peer_connection.connectionState in ["closed", "failed", "disconnected"]:
+                logger.info("Connection lost, stopping client")
+                self.running = False
         
         @self.peer_connection.on("track")
         def on_track(track):
@@ -83,16 +93,30 @@ class WebRTCClient:
         @self.peer_connection.on("icecandidate")
         async def on_icecandidate(candidate):
             if candidate and self.host_id:
-                await self.websocket.send(json.dumps({
-                    'type': 'ice_candidate',
-                    'sender': self.peer_id,
-                    'target': self.host_id,
-                    'candidate': {
-                        'candidate': candidate.candidate,
-                        'sdpMid': candidate.sdpMid,
-                        'sdpMLineIndex': candidate.sdpMLineIndex
-                    }
-                }))
+                try:
+                    await self.websocket.send(json.dumps({
+                        'type': 'ice_candidate',
+                        'sender': self.peer_id,
+                        'target': self.host_id,
+                        'candidate': {
+                            'candidate': candidate.candidate,
+                            'sdpMid': candidate.sdpMid,
+                            'sdpMLineIndex': candidate.sdpMLineIndex
+                        }
+                    }))
+                except Exception as e:
+                    logger.error(f"Error sending ICE candidate: {e}")
+        
+        @self.peer_connection.on("icegatheringstatechange")
+        async def on_icegatheringstatechange():
+            logger.info(f"ICE gathering state: {self.peer_connection.iceGatheringState}")
+        
+        @self.peer_connection.on("iceconnectionstatechange")
+        async def on_iceconnectionstatechange():
+            logger.info(f"ICE connection state: {self.peer_connection.iceConnectionState}")
+            if self.peer_connection.iceConnectionState == "failed":
+                logger.error("ICE connection failed")
+                self.running = False
     
     async def receive_video_frames(self, track):
         """Receive and queue video frames"""
@@ -238,6 +262,15 @@ class WebRTCClient:
                     elif msg_type == 'ice_candidate':
                         await self.handle_ice_candidate(data)
                     
+                    elif msg_type == 'host_disconnected':
+                        logger.info("Host disconnected, waiting for reconnection...")
+                        # Clean up current connection
+                        if self.peer_connection:
+                            await self.peer_connection.close()
+                            self.peer_connection = None
+                        self.host_id = None
+                        self.running = False
+                    
                     else:
                         logger.info(f"Received: {msg_type}")
                 
@@ -266,12 +299,34 @@ class WebRTCClient:
             logger.info("Client stopped by user")
         finally:
             # Clean up
-            self.running = False
-            if self.peer_connection:
+            await self.cleanup()
+    
+    async def cleanup(self):
+        """Clean up resources"""
+        logger.info("Cleaning up client resources")
+        self.running = False
+        
+        # Close peer connection
+        if self.peer_connection:
+            try:
                 await self.peer_connection.close()
-            if self.websocket:
+            except Exception as e:
+                logger.error(f"Error closing peer connection: {e}")
+            self.peer_connection = None
+        
+        # Close websocket
+        if self.websocket:
+            try:
                 await self.websocket.close()
-            logger.info("Client stopped")
+            except Exception as e:
+                logger.error(f"Error closing websocket: {e}")
+            self.websocket = None
+        
+        # Wait for display thread to finish
+        if self.display_thread and self.display_thread.is_alive():
+            self.display_thread.join(timeout=2.0)
+        
+        logger.info("Client stopped")
 
 if __name__ == "__main__":
     import argparse
