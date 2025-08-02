@@ -29,36 +29,54 @@ class ScreenStreamTrack(VideoStreamTrack):
         self.fps = fps
         self.quality = quality
         self.frame_time = 1.0 / fps
+        self.frame_count = 0
+        self._started = False
         
         # Get monitor info
         with mss() as sct:
             self.monitor = sct.monitors[1]  # Primary monitor
         
-        logger.info(f"Screen resolution: {self.monitor['width']}x{self.monitor['height']}")
+        logger.info(f"Created ScreenStreamTrack - Resolution: {self.monitor['width']}x{self.monitor['height']}")
+    
+    def start(self):
+        """Start the track"""
+        self._started = True
+        logger.info("ScreenStreamTrack started")
         
     async def recv(self):
         """Capture and return video frame"""
-        pts, time_base = await self.next_timestamp()
+        if self.frame_count == 0:
+            logger.info("ScreenStreamTrack.recv() called for the first time - track is working!")
         
-        # Capture screen
-        with mss() as sct:
-            screenshot = sct.grab(self.monitor)
+        try:
+            pts, time_base = await self.next_timestamp()
             
-            # Convert to PIL Image
-            img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
-            
-            # Convert to numpy array
-            img_array = np.array(img)
-            
-            # Convert BGR to RGB (OpenCV uses BGR, but we need RGB for WebRTC)
-            img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
-            
-            # Create av.VideoFrame
-            frame = av.VideoFrame.from_ndarray(img_rgb, format='rgb24')
-            frame.pts = pts
-            frame.time_base = time_base
-            
-            return frame
+            # Capture screen
+            with mss() as sct:
+                screenshot = sct.grab(self.monitor)
+                
+                # Convert to PIL Image
+                img = Image.frombytes('RGB', screenshot.size, screenshot.bgra, 'raw', 'BGRX')
+                
+                # Convert to numpy array
+                img_array = np.array(img)
+                
+                # Convert BGR to RGB (OpenCV uses BGR, but we need RGB for WebRTC)
+                img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+                
+                # Create av.VideoFrame
+                frame = av.VideoFrame.from_ndarray(img_rgb, format='rgb24')
+                frame.pts = pts
+                frame.time_base = time_base
+                
+                self.frame_count += 1
+                if self.frame_count <= 5 or self.frame_count % 60 == 0:
+                    logger.info(f"ScreenStreamTrack generated frame #{self.frame_count}")
+                
+                return frame
+        except Exception as e:
+            logger.error(f"Error in ScreenStreamTrack.recv(): {e}")
+            raise
 
 class WebRTCHost:
     def __init__(self, signaling_server='ws://localhost:8765', room_id='default'):
@@ -73,8 +91,6 @@ class WebRTCHost:
             RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
             RTCIceServer(urls=["stun:stun1.l.google.com:19302"]),
         ]
-        
-        self.screen_track = None
         
     async def connect_signaling(self):
         """Connect to signaling server"""
@@ -100,11 +116,20 @@ class WebRTCHost:
         pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=self.ice_servers))
         self.peer_connections[client_id] = pc
         
-        # Add screen stream track
-        if not self.screen_track:
-            self.screen_track = ScreenStreamTrack(fps=30, quality=85)
+        # Create a fresh screen stream track for each connection
+        # This ensures proper streaming for reconnections
+        screen_track = ScreenStreamTrack(fps=30, quality=85)
         
-        pc.addTrack(self.screen_track)
+        # Add track with explicit transceiver to ensure proper setup
+        transceiver = pc.addTransceiver(screen_track, direction="sendonly")
+        logger.info(f"Added fresh screen track for client {client_id} with transceiver direction: {transceiver.direction}")
+        
+        # Start the track
+        screen_track.start()
+        
+        # Verify the track was added
+        transceivers = pc.getTransceivers()
+        logger.info(f"Peer connection for {client_id} has {len(transceivers)} transceivers")
         
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
@@ -141,6 +166,17 @@ class WebRTCHost:
             if pc.iceConnectionState in ["failed", "disconnected"]:
                 logger.warning(f"ICE connection failed/disconnected for {client_id}")
                 # The connection state handler will clean up
+            elif pc.iceConnectionState == "connected":
+                logger.info(f"ICE connection established for {client_id} - video should start streaming")
+        
+        @pc.on("track")
+        def on_track(track):
+            logger.info(f"Host received track from {client_id}: {track.kind}")
+        
+        # Add datachannel state monitoring
+        @pc.on("datachannel")
+        def on_datachannel(channel):
+            logger.info(f"Host received datachannel from {client_id}: {channel.label}")
         
         return pc
     
@@ -155,6 +191,11 @@ class WebRTCHost:
         # Create offer
         offer = await pc.createOffer()
         await pc.setLocalDescription(offer)
+        
+        # Log SDP for debugging
+        logger.info(f"Created offer for {client_id} with {len(pc.getTransceivers())} transceivers")
+        for i, transceiver in enumerate(pc.getTransceivers()):
+            logger.info(f"Transceiver {i}: {transceiver.kind} - direction: {transceiver.direction}")
         
         # Send offer
         await self.websocket.send(json.dumps({
