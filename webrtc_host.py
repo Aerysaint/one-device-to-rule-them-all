@@ -133,8 +133,12 @@ class WebRTCHost:
         
         @pc.on("connectionstatechange")
         async def on_connectionstatechange():
-            logger.info(f"Connection state for {client_id}: {pc.connectionState}")
-            if pc.connectionState in ["closed", "failed", "disconnected"]:
+            state = pc.connectionState
+            logger.info(f"Connection state for {client_id}: {state}")
+            
+            if state == "connected":
+                logger.info(f"🎉 P2P connection established with {client_id} - signaling server no longer needed for this connection")
+            elif state in ["closed", "failed", "disconnected"]:
                 logger.info(f"Cleaning up connection for {client_id}")
                 if client_id in self.peer_connections:
                     try:
@@ -253,6 +257,34 @@ class WebRTCHost:
             del self.peer_connections[client_id]
             logger.info(f"Cleaned up connection for {client_id}")
     
+    async def run_p2p_mode(self):
+        """Continue running in P2P mode after signaling server disconnects"""
+        logger.info("🎯 Host running in P2P mode - signaling server no longer needed")
+        
+        try:
+            while self.peer_connections:
+                await asyncio.sleep(5)
+                
+                # Show status of active connections
+                active_count = len(self.peer_connections)
+                logger.info(f"📺 Host maintaining {active_count} P2P connection(s)")
+                
+                # Clean up any closed connections
+                closed_connections = []
+                for client_id, pc in self.peer_connections.items():
+                    if pc.connectionState in ["closed", "failed", "disconnected"]:
+                        closed_connections.append(client_id)
+                
+                for client_id in closed_connections:
+                    logger.info(f"Removing closed connection: {client_id}")
+                    if client_id in self.peer_connections:
+                        del self.peer_connections[client_id]
+            
+            logger.info("All P2P connections closed, shutting down host")
+            
+        except KeyboardInterrupt:
+            logger.info("P2P mode stopped by user")
+    
     async def handle_signaling_messages(self):
         """Handle incoming signaling messages"""
         try:
@@ -289,7 +321,15 @@ class WebRTCHost:
                     logger.error(f"Error handling message: {e}")
         
         except websockets.exceptions.ConnectionClosed:
-            logger.info("Signaling connection closed")
+            logger.info("🔌 Signaling connection closed")
+            # Check if we have active P2P connections
+            active_connections = len(self.peer_connections)
+            if active_connections > 0:
+                logger.info(f"📺 Continuing with {active_connections} active P2P connection(s)")
+                # Keep the host running to maintain P2P connections
+                await self.run_p2p_mode()
+            else:
+                logger.info("No active P2P connections, shutting down")
         except Exception as e:
             logger.error(f"Signaling error: {e}")
     
@@ -307,10 +347,20 @@ class WebRTCHost:
             logger.info("Host stopped by user")
         finally:
             # Clean up
-            for pc in self.peer_connections.values():
-                await pc.close()
+            # Create a copy of the values to avoid "dictionary changed size during iteration" error
+            peer_connections_copy = list(self.peer_connections.values())
+            for pc in peer_connections_copy:
+                try:
+                    await pc.close()
+                except Exception as e:
+                    logger.error(f"Error closing peer connection: {e}")
+            
             if self.websocket:
-                await self.websocket.close()
+                try:
+                    await self.websocket.close()
+                except Exception as e:
+                    logger.error(f"Error closing websocket: {e}")
+            
             logger.info("Host stopped")
 
 if __name__ == "__main__":
