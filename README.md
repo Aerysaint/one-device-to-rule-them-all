@@ -1,15 +1,17 @@
-# Screen Streaming Module
+# WebRTC Screen Streaming Module
 
-A low-latency, high-quality screen streaming solution for Windows-to-Windows remote control. This module allows you to share your screen over a network connection with optimized performance.
+A professional-grade, low-latency screen streaming solution with NAT traversal support. Built with WebRTC for real-world deployment across networks, firewalls, and NATs.
 
 ## Features
 
-- **Low Latency**: Optimized for minimal delay using efficient capture and compression
-- **High Quality**: Configurable JPEG quality with zlib compression
-- **Multi-Client Support**: Multiple clients can connect to one host simultaneously
-- **Real-time Stats**: FPS counter and connection monitoring
-- **Keyboard Controls**: Fullscreen toggle and easy exit options
-- **Network Ready**: Easy configuration for local network or internet access
+- **WebRTC with NAT Traversal**: Works across firewalls and NATs using STUN servers
+- **Signaling Server**: Handles peer discovery and WebRTC negotiation
+- **Low Latency**: Optimized WebRTC streaming with minimal buffering
+- **High Quality**: Real-time screen capture with efficient encoding
+- **Multi-Client Support**: Multiple clients can connect to one host
+- **Room-based**: Organize connections by room IDs
+- **Cross-Network**: Works on local networks and across the internet
+- **Fallback Support**: Legacy TCP version included for local networks
 
 ## Quick Start
 
@@ -18,44 +20,63 @@ A low-latency, high-quality screen streaming solution for Windows-to-Windows rem
 python setup.py
 ```
 
-### 2. Start the Host (Screen Sharing Device)
+### 2. Start the Signaling Server
 ```bash
-python screen_host.py
+python signaling_server.py
 ```
 
-### 3. Start the Client (Viewing Device)
+### 3. Start the Host (Screen Sharing Device)
 ```bash
-python screen_client.py
+python webrtc_host.py
+```
+
+### 4. Start the Client (Viewing Device)
+```bash
+python webrtc_client.py
 ```
 
 ## Configuration
 
-### Host Configuration (screen_host.py)
-- `HOST`: Set to 'localhost' for local testing, '0.0.0.0' for network access
-- `PORT`: Default 9999, change if needed
-- `QUALITY`: JPEG quality 1-100 (85 recommended)
-- `FPS`: Frames per second (30 recommended)
+### WebRTC Configuration
+- **Signaling Server**: Default `ws://localhost:8765`
+- **Room ID**: Default 'default', use custom rooms for isolation
+- **STUN Servers**: Google STUN servers configured by default
+- **Video Quality**: 30 FPS with optimized encoding
 
-### Client Configuration (screen_client.py)
-- `HOST`: IP address of the host machine
-- `PORT`: Must match host port
+### Command Line Options
+```bash
+# Custom signaling server and room
+python webrtc_host.py --signaling ws://your-server.com:8765 --room myroom
+python webrtc_client.py --signaling ws://your-server.com:8765 --room myroom
+```
 
 ## Controls (Client)
 - **Q or ESC**: Quit the client
 - **F**: Toggle fullscreen mode
 - **W**: Return to windowed mode
 
-## Network Setup
+## Deployment
 
-### Local Network Access
-1. On host machine, change `HOST = '0.0.0.0'` in screen_host.py
-2. On client machine, change `HOST = 'HOST_IP_ADDRESS'` in screen_client.py
-3. Ensure Windows Firewall allows the application through port 9999
+### Local Network
+The signaling server runs on localhost by default. Both host and client will automatically discover each other through the signaling server.
 
-### Internet Access (Advanced)
-1. Configure port forwarding on your router for port 9999
-2. Use your public IP address on the client
-3. Consider security implications and use VPN when possible
+### Internet Access
+1. **Deploy Signaling Server**: Run `signaling_server.py` on a public server
+2. **Update URLs**: Point both host and client to your signaling server
+3. **Firewall**: Ensure port 8765 (signaling) is open on your server
+4. **NAT Traversal**: WebRTC handles NAT/firewall traversal automatically
+
+### Production Deployment
+```bash
+# On your public server
+python signaling_server.py
+
+# On host machine
+python webrtc_host.py --signaling ws://your-server.com:8765
+
+# On client machine  
+python webrtc_client.py --signaling ws://your-server.com:8765
+```
 
 ## Performance Optimization
 
@@ -71,11 +92,18 @@ python screen_client.py
 
 ## Technical Details
 
+### WebRTC Implementation
 - **Screen Capture**: MSS (Multi-Screen Shot) for fastest Windows capture
-- **Compression**: JPEG encoding + zlib compression
-- **Transport**: TCP sockets with JSON framing
-- **Display**: OpenCV for cross-platform compatibility
-- **Threading**: Separate threads for capture, transmission, and display
+- **Video Encoding**: Hardware-accelerated encoding via aiortc/libav
+- **Transport**: WebRTC with ICE/STUN for NAT traversal
+- **Signaling**: WebSocket-based signaling server
+- **Display**: OpenCV with minimal buffering for low latency
+
+### Network Architecture
+- **Signaling**: WebSocket server for peer discovery and SDP exchange
+- **Media**: Direct P2P WebRTC connection between host and clients
+- **NAT Traversal**: STUN servers handle most NAT scenarios
+- **Fallback**: TURN server support can be added for restrictive networks
 
 ## Troubleshooting
 

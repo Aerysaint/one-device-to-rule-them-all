@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Setup script for the screen streaming module
+Setup script for the WebRTC screen streaming module
 """
 
 import subprocess
@@ -12,10 +12,14 @@ def install_requirements():
     print("Installing required packages...")
     
     requirements = [
+        "aiortc==1.6.0",
         "opencv-python==4.8.1.78",
         "numpy==1.24.3", 
         "Pillow==10.0.1",
-        "mss==9.0.1"
+        "mss==9.0.1",
+        "websockets==11.0.3",
+        "aiohttp==3.9.1",
+        "av==10.0.0"
     ]
     
     for package in requirements:
@@ -57,9 +61,12 @@ def main():
         return False
     
     print("\n=== Setup Complete ===")
-    print("To start the host (screen sharing): python screen_host.py")
-    print("To start the client (screen viewing): python screen_client.py")
-    print("\nFor network access, edit the HOST variable in both files")
+    print("WebRTC Screen Streaming Setup:")
+    print("1. Start signaling server: python signaling_server.py")
+    print("2. Start host (screen sharing): python webrtc_host.py")
+    print("3. Start client (screen viewing): python webrtc_client.py")
+    print("\nFor internet access, deploy signaling server on public server")
+    print("Legacy TCP version also available: screen_host.py & screen_client.py")
     
     return True
 

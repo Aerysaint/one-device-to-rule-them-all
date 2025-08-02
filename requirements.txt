@@ -1,9 +1,10 @@
+aiortc==1.6.0
 opencv-python==4.8.1.78
 numpy==1.24.3
 Pillow==10.0.1
 mss==9.0.1
-socket
-threading
-json
-base64
-zlib
+websockets==11.0.3
+asyncio
+aiohttp==3.9.1
+av==10.0.0
+fractions

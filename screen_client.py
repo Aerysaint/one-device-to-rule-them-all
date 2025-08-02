@@ -167,7 +167,7 @@ class ScreenClient:
 
 if __name__ == "__main__":
     # Configuration
-    HOST = 'localhost'  # Change to host IP for network access
+    HOST = '192.168.5.80'  # Change to host IP for network access
     PORT = 9999
     
     client = ScreenClient(HOST, PORT)
