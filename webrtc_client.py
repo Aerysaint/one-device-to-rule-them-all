@@ -133,7 +133,15 @@ class WebRTCClient:
         
         @self.peer_connection.on("icegatheringstatechange")
         async def on_icegatheringstatechange():
-            logger.info(f"ICE gathering state: {self.peer_connection.iceGatheringState}")
+            gathering_state = self.peer_connection.iceGatheringState
+            logger.info(f"ICE gathering state: {gathering_state}")
+            
+            if gathering_state == "complete":
+                # Check local description for candidates after gathering
+                if self.peer_connection.localDescription:
+                    sdp_lines = self.peer_connection.localDescription.sdp.split('\n')
+                    candidate_lines = [line for line in sdp_lines if 'candidate:' in line]
+                    logger.info(f"🔍 After ICE gathering: {len(candidate_lines)} candidates in local SDP")
         
         @self.peer_connection.on("iceconnectionstatechange")
         async def on_iceconnectionstatechange():
@@ -269,6 +277,13 @@ class WebRTCClient:
         answer = await self.peer_connection.createAnswer()
         await self.peer_connection.setLocalDescription(answer)
         
+        # Debug: Check if answer SDP contains host candidates
+        sdp_lines = self.peer_connection.localDescription.sdp.split('\n')
+        candidate_lines = [line for line in sdp_lines if 'candidate:' in line]
+        logger.info(f"📋 Answer SDP contains {len(candidate_lines)} embedded candidates")
+        for i, candidate_line in enumerate(candidate_lines[:3]):  # Show first 3
+            logger.info(f"  Answer Candidate {i+1}: {candidate_line.strip()}")
+        
         # Send answer to host
         await self.websocket.send(json.dumps({
             'type': 'answer',
@@ -364,6 +379,8 @@ class WebRTCClient:
                 return False
             else:
                 logger.info("Signaling connection closed - continuing with P2P connection")
+                # Give WebRTC connection a moment to stabilize after signaling loss
+                await asyncio.sleep(2)
                 return True
         except Exception as e:
             logger.error(f"Signaling error: {e}")
@@ -450,10 +467,36 @@ class WebRTCClient:
                         logger.debug(f"Error in signaling monitor: {e}")
         except websockets.exceptions.ConnectionClosed:
             logger.info("🔌 Signaling server disconnected - P2P session continues independently!")
+            # Add extra monitoring to see if WebRTC connection survives
+            await self.monitor_webrtc_after_signaling_loss()
         except asyncio.CancelledError:
             logger.debug("Signaling monitor cancelled")
         except Exception as e:
             logger.debug(f"Signaling monitor error: {e}")
+    
+    async def monitor_webrtc_after_signaling_loss(self):
+        """Monitor WebRTC connection health after signaling server disconnects"""
+        logger.info("🔍 Monitoring WebRTC connection stability after signaling loss...")
+        
+        for i in range(10):  # Monitor for 10 seconds
+            await asyncio.sleep(1)
+            
+            if self.peer_connection:
+                conn_state = self.peer_connection.connectionState
+                ice_state = self.peer_connection.iceConnectionState
+                logger.info(f"WebRTC health check {i+1}/10: conn={conn_state}, ice={ice_state}, running={self.running}")
+                
+                if not self.webrtc_connected or not self.running:
+                    logger.warning(f"WebRTC connection lost after signaling disconnect (check {i+1})")
+                    break
+            else:
+                logger.warning("Peer connection is None after signaling loss")
+                break
+        
+        if self.webrtc_connected and self.running:
+            logger.info("✅ WebRTC connection survived signaling server disconnect!")
+        else:
+            logger.error("❌ WebRTC connection failed after signaling server disconnect")
     
     async def cleanup(self):
         """Clean up resources"""

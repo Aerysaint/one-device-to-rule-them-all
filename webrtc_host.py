@@ -201,6 +201,13 @@ class WebRTCHost:
         for i, transceiver in enumerate(pc.getTransceivers()):
             logger.info(f"Transceiver {i}: {transceiver.kind} - direction: {transceiver.direction}")
         
+        # Debug: Check if SDP contains host candidates
+        sdp_lines = pc.localDescription.sdp.split('\n')
+        candidate_lines = [line for line in sdp_lines if 'candidate:' in line]
+        logger.info(f"📋 SDP contains {len(candidate_lines)} embedded candidates")
+        for i, candidate_line in enumerate(candidate_lines[:3]):  # Show first 3
+            logger.info(f"  Candidate {i+1}: {candidate_line.strip()}")
+        
         # Send offer
         await self.websocket.send(json.dumps({
             'type': 'offer',
@@ -241,6 +248,7 @@ class WebRTCHost:
                 sdpMid=candidate_data['sdpMid'],
                 sdpMLineIndex=candidate_data['sdpMLineIndex']
             )
+            print("AAAA",candidate)
             await pc.addIceCandidate(candidate)
             logger.info(f"Added ICE candidate from {client_id}")
     
@@ -326,6 +334,8 @@ class WebRTCHost:
             active_connections = len(self.peer_connections)
             if active_connections > 0:
                 logger.info(f"📺 Continuing with {active_connections} active P2P connection(s)")
+                # Give WebRTC connections a moment to stabilize after signaling loss
+                await asyncio.sleep(2)
                 # Keep the host running to maintain P2P connections
                 await self.run_p2p_mode()
             else:
